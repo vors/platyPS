@@ -110,7 +110,7 @@ namespace Markdown.MAML.Parser
                         this.CreateParagraph },
 
                     {   "hyperlink",
-                        @"\[(.+?)\]\((https?://[^'\"">\s]+)?\)",
+                        @"\[(.+?)\]\((.*)?\)",
                         this.CreateHyperlinkSpan },
 
                     {   "bold",

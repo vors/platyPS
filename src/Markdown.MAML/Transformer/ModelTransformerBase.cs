@@ -350,8 +350,6 @@ namespace Markdown.MAML.Transformer
             bool previousIsHyperLink = false;
             foreach (var paragraphSpan in spans)
             {
-                // TODO: make it handle hyperlinks, codesnippets, etc more wisely
-
                 HyperlinkSpan hyperlink = paragraphSpan as HyperlinkSpan;
                 if (!first && hyperlink != null)
                 {
@@ -361,18 +359,25 @@ namespace Markdown.MAML.Transformer
                 {
                     sb.Append(" ");
                 }
-                
-                sb.Append(paragraphSpan.Text);
+
                 if (hyperlink != null)
                 {
-                    if (!string.IsNullOrWhiteSpace(hyperlink.Uri))
-                    {
-                        sb.AppendFormat(" ({0})", hyperlink.Uri);
-                    }
-                    else
+                    sb.AppendFormat("{0}{1}{2}{3}{4}", 
+                            MamlLink.HYPERLINK_START_MARKER, 
+                            hyperlink.Text,
+                            MamlLink.HYPERLINK_MIDDLE_MARKER,
+                            hyperlink.Uri == null ? "" : hyperlink.Uri,
+                            MamlLink.HYPERLINK_END_MARKER
+                        );
+
+                    if (string.IsNullOrWhiteSpace(hyperlink.Uri))
                     {
                         previousIsHyperLink = paragraphSpan is HyperlinkSpan;
                     }
+                }
+                else
+                {
+                    sb.Append(paragraphSpan.Text);
                 }
 
                 first = false;

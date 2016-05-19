@@ -56,12 +56,13 @@ And this is my last line.
 This is Synopsis #hashtagNotAHeader.
 
 ## DESCRIPTION
-I'm description
+I'm description.
+With a [hyper](link).
 ");
 
             string[] description = GetXmlContent(maml, "/helpItems/command:command/maml:description/maml:para");
             Assert.Equal(1, description.Length);
-            Assert.Equal("I'm description", description[0]);
+            Assert.Equal("I'm description. With a hyper (link).", description[0]);
 
             string[] synopsis = GetXmlContent(maml, "/helpItems/command:command/command:details/maml:description/maml:para");
             Assert.Equal(1, synopsis.Length);

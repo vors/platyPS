@@ -439,11 +439,31 @@ namespace Markdown.MAML.Renderer
         {
             if (!string.IsNullOrWhiteSpace(body))
             {
+                body = RenderHyperLinks(body);
                 string[] paragraphs = body.Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
 
                 var text = GetAutoWrappingForMarkdown(paragraphs.Select(para => GetEscapedMarkdownText(para.Trim())).ToArray());
                 _stringBuilder.AppendFormat("{0}{1}{1}", text, Environment.NewLine);
             }
+        }
+
+        public static string RenderHyperLinks(string text)
+        {
+            string linkMatchString = string.Format("{0}{1}{2}{3}{4}",
+                MamlLink.HYPERLINK_START_MARKER,
+                "(.*)",
+                MamlLink.HYPERLINK_MIDDLE_MARKER,
+                "(.*)",
+                MamlLink.HYPERLINK_END_MARKER);
+
+            return Regex.Replace(text, linkMatchString, new MatchEvaluator(HyperLinkEvaluator));
+        }
+
+        private static string HyperLinkEvaluator(Match match)
+        {
+            var text = match.Groups[1].Value;
+            var uri = match.Groups[2].Value;
+            return string.Format("[{0}]({1})", text, uri);
         }
 
         private static string BackSlashMatchEvaluater(Match match)

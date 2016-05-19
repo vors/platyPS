@@ -6,6 +6,7 @@ using Markdown.MAML.Model.Markdown;
 using Markdown.MAML.Model.MAML;
 using Markdown.MAML.Parser;
 using Markdown.MAML.Transformer;
+using System.Text.RegularExpressions;
 
 namespace Markdown.MAML.Renderer
 {
@@ -357,11 +358,12 @@ namespace Markdown.MAML.Renderer
             PopTag(1);
         }
 
-        private void AddParas(string Body)
+        private void AddParas(string body)
         {
-            if (Body != null)
+            if (body != null)
             {
-                string[] paragraphs = Body.Split(new string[] { Environment.NewLine }, StringSplitOptions.None);
+                body = RenderHyperLinks(body);
+                string[] paragraphs = body.Split(new string[] { Environment.NewLine }, StringSplitOptions.None);
 
                 foreach (string para in paragraphs)
                 {
@@ -375,6 +377,34 @@ namespace Markdown.MAML.Renderer
         private string XmlEscape(string s)
         {
             return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+        }
+
+        // regions markdown links
+
+        public static string RenderHyperLinks(string text)
+        {
+            string linkMatchString = string.Format("{0}{1}{2}{3}{4}", 
+                MamlLink.HYPERLINK_START_MARKER, 
+                "(.*)",
+                MamlLink.HYPERLINK_MIDDLE_MARKER, 
+                "(.*)",
+                MamlLink.HYPERLINK_END_MARKER);
+
+            return Regex.Replace(text, linkMatchString, new MatchEvaluator(HyperLinkEvaluator));
+        }
+
+        private static string HyperLinkEvaluator(Match match)
+        {
+            var text = match.Groups[1].Value;
+            var uri = match.Groups[2].Value;
+
+            // special case for a bunch of non-populated links
+            if (string.IsNullOrWhiteSpace(uri))
+            {
+                return text;
+            }
+
+            return string.Format("{0} ({1})", text, uri);
         }
     }
 }

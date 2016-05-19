@@ -123,6 +123,34 @@ namespace Markdown.MAML.Test.Parser
             Assert.Equal("", hyperlinkSpan.Uri);
         }
 
+
+        [Fact]
+        public void ParsesParagraphWithHyperLinks()
+        {
+            string text = @"
+By default, platyPS stores help file name and markdown schema version.
+
+The metadata section can contain user-provided key-value string pairs.
+They would be ignore by [New-ExternalHelp](New-ExternalHelp.md).
+These values can be used by external tools.
+
+[Get-MarkdownMetadata](Get-MarkdownMetadata.md) provides a consistent way to retrieve these key-value pairs.
+They return as a key-value \<Dictionary\[String, String\]\> object.
+";
+            ParagraphNode paragraphNode =
+                this.ParseAndGetExpectedChild<ParagraphNode>(
+                    text,
+                    MarkdownNodeType.Paragraph);
+
+            var spans = paragraphNode.Spans.ToArray();
+            Assert.Equal(5, spans.Length);
+            Assert.IsType(typeof(TextSpan), spans[0]);
+            Assert.IsType(typeof(HyperlinkSpan), spans[1]);
+            Assert.IsType(typeof(TextSpan), spans[2]);
+            Assert.IsType(typeof(HyperlinkSpan), spans[3]);
+            Assert.IsType(typeof(TextSpan), spans[4]);
+        }
+
         [Fact]
         public void TextSpansCanContainDoubleQuotes()
         {

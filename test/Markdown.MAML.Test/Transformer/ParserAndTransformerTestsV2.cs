@@ -5,6 +5,7 @@ using Markdown.MAML.Parser;
 using Markdown.MAML.Transformer;
 using Xunit;
 using Markdown.MAML.Model.Markdown;
+using Markdown.MAML.Renderer;
 
 namespace Markdown.MAML.Test.Transformer
 {
@@ -35,7 +36,7 @@ Here is a [hyperlink](http://non-existing-uri).
 ");
             MamlCommand mamlCommand = NodeModelToMamlModelV2(doc).First();
             Assert.Equal(mamlCommand.Name, "Get-Foo");
-            Assert.Equal(mamlCommand.Synopsis, "Here is a hyperlink (http://non-existing-uri).");
+            Assert.Equal(MamlRenderer.RenderHyperLinks(mamlCommand.Synopsis), "Here is a hyperlink (http://non-existing-uri).");
         }
 
         [Fact]
@@ -262,8 +263,9 @@ Runs the [Set-WSManQuickConfig]() cmdlet
 
 ");
             var mamlCommand = NodeModelToMamlModelV2(doc).ToArray();
-            Assert.Equal(mamlCommand.Count(), 1);
-            Assert.Equal(mamlCommand[0].Synopsis, "Runs the Set-WSManQuickConfig cmdlet");
+            Assert.Equal(1, mamlCommand.Count());
+            Assert.Equal(string.Format("Runs the {0}Set-WSManQuickConfig{1}{2} cmdlet", MamlLink.HYPERLINK_START_MARKER, MamlLink.HYPERLINK_MIDDLE_MARKER, MamlLink.HYPERLINK_END_MARKER), mamlCommand[0].Synopsis);
+            Assert.Equal(MamlRenderer.RenderHyperLinks(mamlCommand[0].Synopsis), "Runs the Set-WSManQuickConfig cmdlet");
         }
 
         [Fact]
