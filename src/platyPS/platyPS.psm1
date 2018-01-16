@@ -1536,6 +1536,7 @@ function GetMamlModelImpl
     # we need to pass it into .NET IEnumerable<MamlCommand> API
     $res = New-Object 'System.Collections.Generic.List[Markdown.MAML.Model.MAML.MamlCommand]'
 
+    $tt = Measure-Command {1}
     $markdownFiles | ForEach-Object {
         $mdText = MyGetContent $_ -Encoding $Encoding
         $schema = GetSchemaVersion $mdText
@@ -1543,7 +1544,7 @@ function GetMamlModelImpl
         $t = NewModelTransformer -schema $schema $ApplicableTag
 
         $parseMode = GetParserMode -PreserveFormatting:$ForAnotherMarkdown
-        $model = $p.ParseString($mdText, $parseMode, $_)
+        $tt += Measure-Command { $model = $p.ParseString($mdText, $parseMode, $_) }
         Write-Progress -Activity "Parsing markdown" -Completed
         $maml = $t.NodeModelToMamlModel($model)
 
@@ -1558,6 +1559,8 @@ function GetMamlModelImpl
             $res.Add($_)
         }
     }
+
+    Write-Warning $tt
 
     return @(,$res)
 }

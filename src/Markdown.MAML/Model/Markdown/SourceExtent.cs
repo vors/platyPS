@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Markdig.Syntax;
 
 namespace Markdown.MAML.Model.Markdown
 {
@@ -53,6 +54,18 @@ namespace Markdown.MAML.Model.Markdown
                 sourceText.Substring(
                     this.Offset.Start, 
                     this.Offset.End - this.Offset.Start);
+        }
+
+        public SourceExtent(
+            MarkdownObject markdownObject
+        )
+        {
+            // TODO
+            this.File = null;
+            this.Offset = new SourceRange(markdownObject.Span.Start, markdownObject.Span.End);
+            this.Line = new SourceRange(markdownObject.Line, markdownObject.Line);
+            this.Column = new SourceRange(markdownObject.Column, markdownObject.Column);
+            this.OriginalText = markdownObject.ToString();
         }
 
         private void CalculatePositionFromNewlines(

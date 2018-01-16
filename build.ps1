@@ -38,7 +38,8 @@ if (Get-Variable -Name IsCoreClr -ValueOnly -ErrorAction SilentlyContinue) {
 
 $assemblyPaths = (
     (Resolve-Path "publish/Markdown.MAML.dll").Path,
-    (Resolve-Path "publish/YamlDotNet.dll").Path
+    (Resolve-Path "publish/YamlDotNet.dll").Path,
+    (Resolve-Path "publish/markdig.dll").Path
 )
 
 # copy artifacts
