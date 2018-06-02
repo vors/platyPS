@@ -5,6 +5,8 @@ using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Markdown.MAML.Model.MAML;
 using Markdown.MAML.Model.Markdown;
+using Markdown.MAML.Parser;
+using Markdown.MAML.Resources;
 
 namespace Markdown.MAML.Transformer
 {
@@ -13,8 +15,8 @@ namespace Markdown.MAML.Transformer
 
         private MarkdownDocument _root;
         private IEnumerator<Block> _rootEnumerator;
-        private Action<string> _infoCallback;
-        private Action<string> _warningCallback;
+        private readonly Action<string> _infoCallback;
+        private readonly Action<string> _warningCallback;
 
         internal const int COMMAND_NAME_HEADING_LEVEL = 1;
         internal const int COMMAND_ENTRIES_HEADING_LEVEL = 2;
@@ -23,13 +25,23 @@ namespace Markdown.MAML.Transformer
         internal const int EXAMPLE_HEADING_LEVEL = 3;
         internal const int PARAMETERSET_NAME_HEADING_LEVEL = 3;
 
-        private string[] _applicableTags;
+        public static readonly string ALL_PARAM_SETS_MONIKER = "(All)";
+        private readonly string[] _applicableTags;
+        private readonly ParserMode _parserMode;
 
-        public MarkdigModelTransformer(Action<string> infoCallback, Action<string> warningCallback, string[] applicableTags)
+        List<Tuple<string, Dictionary<string, MamlParameter>>> _parameterName2ParameterSetMap =
+            new List<Tuple<string, Dictionary<string, MamlParameter>>>();
+
+        public MarkdigModelTransformer(
+            Action<string> infoCallback,
+            Action<string> warningCallback,
+            ParserMode parserMode,
+            string[] applicableTags)
         {
             _applicableTags = applicableTags;
             _infoCallback = infoCallback;
             _warningCallback = warningCallback;
+            _parserMode = parserMode;
         }
 
         public IEnumerable<MamlCommand> MarkdigModelToMamlModel(MarkdownDocument doc)
@@ -104,10 +116,32 @@ namespace Markdown.MAML.Transformer
             return null;
         }
 
-        private string GetText(HeadingBlock headingBlock)
+        private string GetText(HeadingBlock block)
         {
-            var slice = ((headingBlock.Inline as ContainerInline).FirstChild as LiteralInline).Content;
+            // TODO(markdig): this is a hax, let's find a better way
+            var slice = ((block.Inline as ContainerInline).FirstChild as LiteralInline).Content;
             return slice.Text.Substring(slice.Start, slice.End - slice.Start + 1);
+        }
+
+        private string GetText(CodeBlock block)
+        {
+            return WriteLeafRawLines(block);
+        }
+
+        /// <summary>
+        /// Writes the lines of a <see cref="LeafBlock"/>
+        /// </summary>
+        public string WriteLeafRawLines(LeafBlock leafBlock)
+        {
+            if (leafBlock == null) throw new ArgumentNullException(nameof(leafBlock));
+            if (leafBlock.Lines.Lines != null)
+            {
+                var lines = leafBlock.Lines;
+                var slices = lines.Lines;
+
+                return String.Join("\r\n", slices.Select(s => s.Slice.ToString())).Trim();
+            }
+            return "";
         }
 
         protected void UngetNode(MarkdownObject node)
@@ -127,141 +161,144 @@ namespace Markdown.MAML.Transformer
             return GetTextFromParagraphNode(ParagraphNodeRule());
         }
 
-        //protected void InputsRule(MamlCommand commmand)
-        //{
-        //    MamlInputOutput input;
-        //    while ((input = InputOutputRule()) != null)
-        //    {
-        //        commmand.Inputs.Add(input);
-        //    }
-        //}
+        protected void InputsRule(MamlCommand commmand)
+        {
+            MamlInputOutput input;
+            while ((input = InputOutputRule()) != null)
+            {
+                commmand.Inputs.Add(input);
+            }
+        }
 
-        //protected void OutputsRule(MamlCommand commmand)
-        //{
-        //    MamlInputOutput output;
-        //    while ((output = InputOutputRule()) != null)
-        //    {
-        //        commmand.Outputs.Add(output);
-        //    }
-        //}
+        protected void OutputsRule(MamlCommand commmand)
+        {
+            MamlInputOutput output;
+            while ((output = InputOutputRule()) != null)
+            {
+                commmand.Outputs.Add(output);
+            }
+        }
 
-        //protected void ExamplesRule(MamlCommand commmand)
-        //{
-        //    MamlExample example;
-        //    while ((example = ExampleRule()) != null)
-        //    {
-        //        commmand.Examples.Add(example);
-        //    }
-        //}
+        protected void ExamplesRule(MamlCommand commmand)
+        {
+            MamlExample example;
+            while ((example = ExampleRule()) != null)
+            {
+                commmand.Examples.Add(example);
+            }
+        }
 
-        //protected MamlExample ExampleRule()
-        //{
-        //    // grammar:
-        //    // #### ExampleTitle
-        //    // Introduction
-        //    // ```
-        //    // code
-        //    // ```
-        //    // Remarks
-        //    var node = GetNextNode();
-        //    try
-        //    {
-        //        var headingNode = GetHeadingWithExpectedLevel(node, EXAMPLE_HEADING_LEVEL);
+        protected MamlExample ExampleRule()
+        {
+            // grammar:
+            // #### ExampleTitle
+            // Introduction
+            // ```
+            // code
+            // ```
+            // Remarks
+            var node = GetNextNode();
+            try
+            {
+                var headingNode = GetHeadingWithExpectedLevel(node, EXAMPLE_HEADING_LEVEL);
 
-        //        if (headingNode == null)
-        //        {
-        //            return null;
-        //        }
+                if (headingNode == null)
+                {
+                    return null;
+                }
 
-        //        MamlExample example = new MamlExample()
-        //        {
-        //            Title = headingNode.Text
-        //        };
-        //        example.Introduction = GetTextFromParagraphNode(ParagraphNodeRule());
-        //        example.FormatOption = headingNode.FormatOption;
-        //        CodeBlockNode codeBlockNode;
-        //        List<MamlCodeBlock> codeBlocks = new List<MamlCodeBlock>();
+                MamlExample example = new MamlExample()
+                {
+                    Title = GetText(headingNode)
+                };
+                example.Introduction = GetTextFromParagraphNode(ParagraphNodeRule());
+                // TODO(markdig): FormatOption
+                example.FormatOption = SectionFormatOption.None;
+                FencedCodeBlock codeBlockNode;
+                List<MamlCodeBlock> codeBlocks = new List<MamlCodeBlock>();
 
-        //        while ((codeBlockNode = CodeBlockRule()) != null)
-        //        {
-        //            codeBlocks.Add(new MamlCodeBlock(
-        //                codeBlockNode.Text,
-        //                codeBlockNode.LanguageMoniker
-        //            ));
-        //        }
+                while ((codeBlockNode = CodeBlockRule()) != null)
+                {
+                    codeBlocks.Add(new MamlCodeBlock(
+                        GetText(codeBlockNode),
+                        codeBlockNode.Info
+                    ));
+                }
 
-        //        example.Code = codeBlocks.ToArray();
+                example.Code = codeBlocks.ToArray();
 
-        //        example.Remarks = GetTextFromParagraphNode(ParagraphNodeRule());
+                example.Remarks = GetTextFromParagraphNode(ParagraphNodeRule());
 
-        //        return example;
-        //    }
-        //    catch (HelpSchemaException headingException)
-        //    {
-        //        Report("Schema exception. This can occur when there are multiple code blocks in one example. " + headingException.Message);
+                return example;
+            }
+            catch (HelpSchemaException headingException)
+            {
+                Report("Schema exception. This can occur when there are multiple code blocks in one example. " + headingException.Message);
 
-        //        throw headingException;
-        //    }
+                throw headingException;
+            }
 
-        //}
+        }
 
-        //protected void RelatedLinksRule(MamlCommand commmand)
-        //{
-        //    var paragraphNode = ParagraphNodeRule();
-        //    if (paragraphNode == null)
-        //    {
-        //        return;
-        //    }
+        protected void RelatedLinksRule(MamlCommand commmand)
+        {
+            var paragraphNode = ParagraphNodeRule();
+            if (paragraphNode == null)
+            {
+                return;
+            }
 
-        //    foreach (var paragraphSpan in paragraphNode.Spans)
-        //    {
-        //        if (paragraphSpan.ParserMode == ParserMode.FormattingPreserve)
-        //        {
-        //            commmand.Links.Add(new MamlLink(isSimplifiedTextLink: true)
-        //            {
-        //                LinkName = paragraphSpan.Text,
-        //            });
-        //        }
-        //        else
-        //        {
-        //            var linkSpan = paragraphSpan as HyperlinkSpan;
-        //            if (linkSpan != null)
-        //            {
-        //                commmand.Links.Add(new MamlLink()
-        //                {
-        //                    LinkName = linkSpan.Text,
-        //                    LinkUri = linkSpan.Uri
-        //                });
-        //            }
-        //            else
-        //            {
-        //                throw new HelpSchemaException(paragraphSpan.SourceExtent, "Expect hyperlink, but got " + paragraphSpan.Text);
-        //            }
-        //        }
-        //    }
-        //}
+            foreach (var paragraphSpan in paragraphNode.Inline)
+            {
+                // TODO(markdig): can we do FormattingPreserve ?
+                //if (paragraphSpan.ParserMode == ParserMode.FormattingPreserve)
+                //{
+                //    commmand.Links.Add(new MamlLink(isSimplifiedTextLink: true)
+                //    {
+                //        LinkName = paragraphSpan.Text,
+                //    });
+                //}
+                //else
+                {
+                    var linkSpan = paragraphSpan as Inline;
+                    if (linkSpan != null)
+                    {
+                        commmand.Links.Add(new MamlLink()
+                        {
+                            LinkName = String.Join("", GetTextFromInlineDisp(linkSpan)), // .Text
+                            LinkUri = "TODO"// linkSpan.Uri
+                        });
+                    }
+                    else
+                    {
+                        throw new HelpSchemaException(new SourceExtent(paragraphSpan), "Expect hyperlink, but got " + String.Join("", GetTextFromInlineDisp(paragraphSpan)));
+                    }
+                }
+            }
+        }
 
-        //protected MamlInputOutput InputOutputRule()
-        //{
-        //    // grammar:
-        //    // #### TypeName
-        //    // Description
-        //    var node = GetNextNode();
-        //    var headingNode = GetHeadingWithExpectedLevel(node, INPUT_OUTPUT_TYPENAME_HEADING_LEVEL);
-        //    if (headingNode == null)
-        //    {
-        //        return null;
-        //    }
+        protected MamlInputOutput InputOutputRule()
+        {
+            // grammar:
+            // #### TypeName
+            // Description
+            var node = GetNextNode();
+            var headingNode = GetHeadingWithExpectedLevel(node, INPUT_OUTPUT_TYPENAME_HEADING_LEVEL);
+            if (headingNode == null)
+            {
+                return null;
+            }
 
-        //    MamlInputOutput typeEntity = new MamlInputOutput()
-        //    {
-        //        TypeName = headingNode.Text,
-        //        Description = SimpleTextSectionRule(),
-        //        FormatOption = headingNode.FormatOption
-        //    };
+            MamlInputOutput typeEntity = new MamlInputOutput()
+            {
+                TypeName = GetText(headingNode),
+                Description = SimpleTextSectionRule(),
+                // TODO(markdig): fix FormatOption
+                FormatOption = SectionFormatOption.None
+            };
 
-        //    return typeEntity;
-        //}
+            return typeEntity;
+        }
 
         protected SourceExtent GetExtent(MarkdownObject node)
         {
@@ -334,86 +371,59 @@ namespace Markdown.MAML.Transformer
             throw new HelpSchemaException(GetExtent(node), "Expect Paragraph");
         }
 
-        //protected string ParagraphOrCodeBlockNodeRule(string excludeLanguageMoniker)
-        //{
-        //    var res = new List<string>();
-        //    MarkdownNode node;
+        protected string ParagraphOrCodeBlockNodeRule(string excludeLanguageMoniker)
+        {
+            var res = new List<string>();
+            MarkdownObject node;
 
-        //    while ((node = GetNextNode()) != null)
-        //    {
-        //        bool breakFlag = false;
-        //        switch (node.NodeType)
-        //        {
-        //            case MarkdownNodeType.Paragraph:
-        //                {
-        //                    res.Add(GetTextFromParagraphNode(node as ParagraphNode));
-        //                    break;
-        //                }
-        //            case MarkdownNodeType.CodeBlock:
-        //                {
-        //                    var codeblock = node as CodeBlockNode;
-        //                    if (!String.Equals(excludeLanguageMoniker, codeblock.LanguageMoniker, StringComparison.OrdinalIgnoreCase))
-        //                    {
-        //                        res.Add(codeblock.Text);
-        //                    }
-        //                    else
-        //                    {
-        //                        UngetNode(node);
-        //                        breakFlag = true;
-        //                    }
+            while ((node = GetNextNode()) != null)
+            {
+                if (node is ParagraphBlock) {
+                    res.Add(GetTextFromParagraphNode(node as ParagraphBlock));
+                } else if (node is FencedCodeBlock) {
+                    var codeblock = node as FencedCodeBlock;
+                    if (!String.Equals(excludeLanguageMoniker, codeblock.Info, StringComparison.OrdinalIgnoreCase))
+                    {
+                        res.Add(GetText(codeblock));
+                    }
+                    else
+                    {
+                        UngetNode(node);
+                        break;
+                    }
+                } else if (node is HeadingBlock) {
+                    UngetNode(node);
+                    break;
+                } else {
+                    throw new HelpSchemaException(GetExtent(node), "Expect Paragraph or CodeBlock");
+                }
+            }
 
-        //                    break;
-        //                }
-        //            case MarkdownNodeType.Heading:
-        //                {
-        //                    UngetNode(node);
-        //                    breakFlag = true;
-        //                    break;
-        //                }
-        //            default:
-        //                {
-        //                    throw new HelpSchemaException(GetExtent(node), "Expect Paragraph or CodeBlock");
-        //                }
-        //        }
+            return string.Join("\r\n\r\n", res);
+        }
 
-        //        if (breakFlag)
-        //        {
-        //            break;
-        //        }
-        //    }
+        /// <summary>
+        /// </summary>
+        /// <returns>
+        /// return paragraphNode if encounterd.
+        /// null, if any header level encountered.
+        /// throw exception, if other unexpected node encountered.
+        /// </returns>
+        protected FencedCodeBlock CodeBlockRule()
+        {
+            var node = GetNextNode();
+            if (node == null)
+            {
+                return null;
+            }
 
-        //    return string.Join("\r\n\r\n", res);
-        //}
-
-        ///// <summary>
-        ///// </summary>
-        ///// <returns>
-        ///// return paragraphNode if encounterd.
-        ///// null, if any header level encountered.
-        ///// throw exception, if other unexpected node encountered.
-        ///// </returns>
-        //protected CodeBlockNode CodeBlockRule()
-        //{
-        //    var node = GetNextNode();
-        //    if (node == null)
-        //    {
-        //        return null;
-        //    }
-
-        //    switch (node.NodeType)
-        //    {
-        //        case MarkdownNodeType.CodeBlock:
-        //            break;
-        //        case MarkdownNodeType.Heading:
-        //        case MarkdownNodeType.Paragraph:
-        //            UngetNode(node);
-        //            return null;
-        //        default:
-        //            throw new HelpSchemaException(GetExtent(node), "Expect CodeBlock");
-        //    }
-
-        //    return node as CodeBlockNode;
-        //}
+            if (node is FencedCodeBlock) {
+                return node as FencedCodeBlock;
+            } else {
+                UngetNode(node);
+                return null;
+            }
+        }
 
         //private string GetTextFromParagraphSpans(IEnumerable<ParagraphSpan> spans)
         //{
@@ -469,9 +479,27 @@ namespace Markdown.MAML.Transformer
                 return "";
             }
             // TODO(markdig): this is a hack, replace it!
-            var firstInline = node.Inline.FirstChild as LiteralInline;
-            return firstInline.Content.Text.Substring(node.Span.Start, node.Span.End - node.Span.Start + 1);
+            //var firstInline = node.Inline.FirstChild as LiteralInline;
+            //return firstInline.Content.Text.Substring(node.Span.Start, node.Span.End - node.Span.Start + 1);
+            return String.Join("", GetTextFromInlineDisp(node.Inline));
             //return GetTextFromParagraphSpans(node.Spans);
+        }
+
+        protected IEnumerable<string> GetTextFromInlineDisp(Inline inline) {
+            if (inline is ContainerInline) {
+                var container = inline as ContainerInline;
+                foreach (Inline x in container) {
+                    foreach (var res in GetTextFromInlineDisp(x)) {
+                        yield return res;
+                    }
+                }
+            } else if (inline is LiteralInline) {
+                yield return inline.ToString();
+            } else if (inline is LineBreakInline) {
+                yield return " ";
+            } else {
+                throw new NotImplementedException("Not implemented GetTextFromInlineDisp for " + inline.GetType().FullName);
+            }
         }
 
         protected void Report(string warning)
@@ -510,27 +538,27 @@ namespace Markdown.MAML.Transformer
                     }
                 case "SYNTAX":
                     {
-                        //SyntaxRule(command);
+                        SyntaxRule(command);
                         break;
                     }
                 case "EXAMPLES":
                     {
-                        //ExamplesRule(command);
+                        ExamplesRule(command);
                         break;
                     }
                 case "PARAMETERS":
                     {
-                        //ParametersRule(command);
+                        ParametersRule(command);
                         break;
                     }
                 case "INPUTS":
                     {
-                        //InputsRule(command);
+                        InputsRule(command);
                         break;
                     }
                 case "OUTPUTS":
                     {
-                        //OutputsRule(command);
+                        OutputsRule(command);
                         break;
                     }
                 case "NOTES":
@@ -540,7 +568,7 @@ namespace Markdown.MAML.Transformer
                     }
                 case "RELATED LINKS":
                     {
-                        //RelatedLinksRule(command);
+                        RelatedLinksRule(command);
                         break;
                     }
                 default:
@@ -551,372 +579,373 @@ namespace Markdown.MAML.Transformer
             return true;
         }
 
-        //protected void SyntaxRule(MamlCommand commmand)
-        //{
-        //    MamlSyntax syntax;
-        //    while ((syntax = SyntaxEntryRule()) != null)
-        //    {
-        //        //this is the only way to retain information on which syntax is the default 
-        //        // without adding new members to command object.
-        //        //Though the cmdlet object, does have a member which contains the default syntax name only.
-        //        if (syntax.IsDefault) { commmand.Syntax.Add(syntax); }
-        //    }
-        //}
+        protected void SyntaxRule(MamlCommand commmand)
+        {
+            MamlSyntax syntax;
+            while ((syntax = SyntaxEntryRule()) != null)
+            {
+                //this is the only way to retain information on which syntax is the default 
+                // without adding new members to command object.
+                //Though the cmdlet object, does have a member which contains the default syntax name only.
+                if (syntax.IsDefault) { commmand.Syntax.Add(syntax); }
+            }
+        }
 
-        //protected MamlSyntax SyntaxEntryRule()
-        //{
-        //    // grammar:
-        //    // ### ParameterSetName 
-        //    // ```
-        //    // code
-        //    // ```
+        protected MamlSyntax SyntaxEntryRule()
+        {
+            // grammar:
+            // ### ParameterSetName 
+            // ```
+            // code
+            // ```
 
-        //    MamlSyntax syntax;
+            MamlSyntax syntax;
 
-        //    var node = GetNextNode();
-        //    if (node.NodeType == MarkdownNodeType.CodeBlock)
-        //    {
-        //        // if header is omitted
-        //        syntax = new MamlSyntax()
-        //        {
-        //            ParameterSetName = ALL_PARAM_SETS_MONIKER,
-        //            IsDefault = true
-        //        };
-        //    }
-        //    else
-        //    {
-        //        var headingNode = GetHeadingWithExpectedLevel(node, PARAMETERSET_NAME_HEADING_LEVEL);
-        //        if (headingNode == null)
-        //        {
-        //            return null;
-        //        }
+            var node = GetNextNode();
+            if (node is FencedCodeBlock)
+            {
+                // if header is omitted
+                syntax = new MamlSyntax()
+                {
+                    ParameterSetName = ALL_PARAM_SETS_MONIKER,
+                    IsDefault = true
+                };
+            }
+            else
+            {
+                var headingNode = GetHeadingWithExpectedLevel(node, PARAMETERSET_NAME_HEADING_LEVEL);
+                if (headingNode == null)
+                {
+                    return null;
+                }
 
-        //        bool isDefault = headingNode.Text.EndsWith(MarkdownStrings.DefaultParameterSetModifier);
-        //        syntax = new MamlSyntax()
-        //        {
-        //            ParameterSetName = isDefault ? headingNode.Text.Substring(0, headingNode.Text.Length - MarkdownStrings.DefaultParameterSetModifier.Length) : headingNode.Text,
-        //            IsDefault = isDefault
-        //        };
+                bool isDefault = GetText(headingNode).EndsWith(MarkdownStrings.DefaultParameterSetModifier);
+                syntax = new MamlSyntax()
+                {
+                    ParameterSetName = isDefault ? GetText(headingNode).Substring(0, GetText(headingNode).Length - MarkdownStrings.DefaultParameterSetModifier.Length) : GetText(headingNode),
+                    IsDefault = isDefault
+                };
 
-        //        var codeBlock = CodeBlockRule();
-        //    }
-        //    // we don't use the output of it
-        //    // TODO: we should capture syntax and verify that it's complient.
-        //    return syntax;
-        //}
+                var codeBlock = CodeBlockRule();
+            }
+            // we don't use the output of it
+            // TODO: we should capture syntax and verify that it's complient.
+            return syntax;
+        }
 
-        //protected void ParametersRule(MamlCommand command)
-        //{
-        //    while (ParameterRule(command))
-        //    {
-        //    }
+        protected void ParametersRule(MamlCommand command)
+        {
+            while (ParameterRule(command))
+            {
+            }
 
-        //    GatherSyntax(command);
-        //}
+            GatherSyntax(command);
+        }
 
-        //private void FillUpSyntax(MamlSyntax syntax, string name)
-        //{
-        //    var parametersList = new List<MamlParameter>();
+        private void FillUpSyntax(MamlSyntax syntax, string name)
+        {
+            var parametersList = new List<MamlParameter>();
 
-        //    foreach (var pair in _parameterName2ParameterSetMap)
-        //    {
-        //        MamlParameter param = null;
-        //        if (pair.Item2.ContainsKey(name))
-        //        {
-        //            param = pair.Item2[name];
-        //        }
-        //        else
-        //        {
-        //            if (pair.Item2.Count == 1 && pair.Item2.First().Key == ALL_PARAM_SETS_MONIKER)
-        //            {
-        //                param = pair.Item2.First().Value;
-        //            }
-        //        }
-        //        if (param != null)
-        //        {
-        //            parametersList.Add(param);
-        //        }
-        //    }
+            foreach (var pair in _parameterName2ParameterSetMap)
+            {
+                MamlParameter param = null;
+                if (pair.Item2.ContainsKey(name))
+                {
+                    param = pair.Item2[name];
+                }
+                else
+                {
+                    if (pair.Item2.Count == 1 && pair.Item2.First().Key == ALL_PARAM_SETS_MONIKER)
+                    {
+                        param = pair.Item2.First().Value;
+                    }
+                }
+                if (param != null)
+                {
+                    parametersList.Add(param);
+                }
+            }
 
-        //    // order parameters based on position
-        //    // User OrderBy instead of Sort for stable sort
-        //    syntax.Parameters.AddRange(parametersList.OrderBy(x => x.Position));
-        //}
+            // order parameters based on position
+            // User OrderBy instead of Sort for stable sort
+            syntax.Parameters.AddRange(parametersList.OrderBy(x => x.Position));
+        }
 
-        //private void GatherSyntax(MamlCommand command)
-        //{
-        //    var parameterSetNames = GetParameterSetNames();
-        //    var defaultSetName = string.Empty;
+        private void GatherSyntax(MamlCommand command)
+        {
+            var parameterSetNames = GetParameterSetNames();
+            var defaultSetName = string.Empty;
 
-        //    if (command.Syntax.Count == 1 && command.Syntax[0].IsDefault)
-        //    {
-        //        //checks for existing IsDefault paramset and remove it while saving the name
-        //        defaultSetName = command.Syntax[0].ParameterSetName;
-        //        command.Syntax.Remove(command.Syntax[0]);
-        //    }
+            if (command.Syntax.Count == 1 && command.Syntax[0].IsDefault)
+            {
+                //checks for existing IsDefault paramset and remove it while saving the name
+                defaultSetName = command.Syntax[0].ParameterSetName;
+                command.Syntax.Remove(command.Syntax[0]);
+            }
 
-        //    if (parameterSetNames.Count == 0)
-        //    {
-        //        // special case: there are no parameters and hence there is only one parameter set
-        //        MamlSyntax syntax = new MamlSyntax();
-        //        command.Syntax.Add(syntax);
-        //    }
+            if (parameterSetNames.Count == 0)
+            {
+                // special case: there are no parameters and hence there is only one parameter set
+                MamlSyntax syntax = new MamlSyntax();
+                command.Syntax.Add(syntax);
+            }
 
-        //    foreach (var setName in parameterSetNames)
-        //    {
-        //        MamlSyntax syntax = new MamlSyntax();
-        //        if (setName == ALL_PARAM_SETS_MONIKER)
-        //        {
-        //            if (parameterSetNames.Count == 1)
-        //            {
-        //                // special case: there is only one parameter set and it's the default one
-        //                // we don't specify the name in this case.
-        //            }
-        //            else
-        //            {
-        //                continue;
-        //            }
-        //        }
-        //        else
-        //        {
-        //            syntax.ParameterSetName = StringComparer.OrdinalIgnoreCase.Equals(syntax.ParameterSetName, defaultSetName)
-        //                ? string.Format("{0}{1}", setName, MarkdownStrings.DefaultParameterSetModifier)
-        //                : setName;
-        //        }
+            foreach (var setName in parameterSetNames)
+            {
+                MamlSyntax syntax = new MamlSyntax();
+                if (setName == ALL_PARAM_SETS_MONIKER)
+                {
+                    if (parameterSetNames.Count == 1)
+                    {
+                        // special case: there is only one parameter set and it's the default one
+                        // we don't specify the name in this case.
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    syntax.ParameterSetName = StringComparer.OrdinalIgnoreCase.Equals(syntax.ParameterSetName, defaultSetName)
+                        ? string.Format("{0}{1}", setName, MarkdownStrings.DefaultParameterSetModifier)
+                        : setName;
+                }
 
-        //        FillUpSyntax(syntax, setName);
-        //        command.Syntax.Add(syntax);
-        //    }
-        //}
+                FillUpSyntax(syntax, setName);
+                command.Syntax.Add(syntax);
+            }
+        }
 
-        //private List<string> GetParameterSetNames()
-        //{
-        //    // Inefficient alogrithm, but it's fine, because all collections are pretty small.
-        //    var parameterSetNames = new List<string>();
-        //    foreach (var pair in _parameterName2ParameterSetMap)
-        //    {
-        //        foreach (var pair2 in pair.Item2)
-        //        {
-        //            var paramSetName = pair2.Key;
+        private List<string> GetParameterSetNames()
+        {
+            // Inefficient alogrithm, but it's fine, because all collections are pretty small.
+            var parameterSetNames = new List<string>();
+            foreach (var pair in _parameterName2ParameterSetMap)
+            {
+                foreach (var pair2 in pair.Item2)
+                {
+                    var paramSetName = pair2.Key;
 
-        //            bool found = false;
-        //            foreach (var candidate in parameterSetNames)
-        //            {
-        //                if (StringComparer.OrdinalIgnoreCase.Equals(candidate, paramSetName))
-        //                {
-        //                    found = true;
-        //                    break;
-        //                }
-        //            }
+                    bool found = false;
+                    foreach (var candidate in parameterSetNames)
+                    {
+                        if (StringComparer.OrdinalIgnoreCase.Equals(candidate, paramSetName))
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
 
-        //            if (!found)
-        //            {
-        //                parameterSetNames.Add(paramSetName);
-        //            }
-        //        }
-        //    }
+                    if (!found)
+                    {
+                        parameterSetNames.Add(paramSetName);
+                    }
+                }
+            }
 
-        //    return parameterSetNames;
-        //}
+            return parameterSetNames;
+        }
 
-        //private bool IsKnownKey(string key)
-        //{
-        //    return StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Type) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Parameter_Sets) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Aliases) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Accepted_values) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Required) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Position) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Default_value) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Accept_pipeline_input) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Accept_wildcard_characters) ||
-        //        StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Applicable);
-        //}
+        private bool IsKnownKey(string key)
+        {
+            return StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Type) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Parameter_Sets) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Aliases) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Accepted_values) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Required) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Position) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Default_value) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Accept_pipeline_input) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Accept_wildcard_characters) ||
+                StringComparer.OrdinalIgnoreCase.Equals(key, MarkdownStrings.Applicable);
+        }
 
-        ///// <summary>
-        ///// we only parse simple key-value pairs here
-        ///// </summary>
-        ///// <param name="yamlSnippet"></param>
-        ///// <returns></returns>
-        //private Dictionary<string, string> ParseYamlKeyValuePairs(CodeBlockNode yamlSnippet)
-        //{
-        //    Dictionary<string, string> result;
-        //    try
-        //    {
-        //        result = MarkdownParser.ParseYamlKeyValuePairs(yamlSnippet.Text);
-        //    }
-        //    catch (ArgumentException)
-        //    {
-        //        throw new HelpSchemaException(yamlSnippet.SourceExtent, "Invalid yaml: expected simple key-value pairs");
-        //    }
+        /// <summary>
+        /// we only parse simple key-value pairs here
+        /// </summary>
+        /// <param name="yamlSnippet"></param>
+        /// <returns></returns>
+        private Dictionary<string, string> ParseYamlKeyValuePairs(CodeBlock yamlSnippet)
+        {
+            Dictionary<string, string> result;
+            try
+            {
+                result = MarkdownParser.ParseYamlKeyValuePairs(GetText(yamlSnippet));
+            }
+            catch (ArgumentException)
+            {
+                throw new HelpSchemaException(new SourceExtent(yamlSnippet), "Invalid yaml: expected simple key-value pairs");
+            }
 
-        //    foreach (var pair in result)
-        //    {
-        //        if (!IsKnownKey(pair.Key))
-        //        {
-        //            throw new HelpSchemaException(yamlSnippet.SourceExtent, "Invalid yaml: unknown key " + pair.Key);
-        //        }
-        //    }
+            foreach (var pair in result)
+            {
+                if (!IsKnownKey(pair.Key))
+                {
+                    throw new HelpSchemaException(new SourceExtent(yamlSnippet), "Invalid yaml: unknown key " + pair.Key);
+                }
+            }
 
-        //    return result;
-        //}
+            return result;
+        }
 
-        //private string[] SplitByCommaAndTrim(string input)
-        //{
-        //    if (input == null)
-        //    {
-        //        return new string[0];
-        //    }
+        private string[] SplitByCommaAndTrim(string input)
+        {
+            if (input == null)
+            {
+                return new string[0];
+            }
 
-        //    return input.Split(',').Select(x => x.Trim()).ToArray();
-        //}
+            return input.Split(',').Select(x => x.Trim()).ToArray();
+        }
 
-        //private void FillUpParameterFromKeyValuePairs(Dictionary<string, string> pairs, MamlParameter parameter)
-        //{
-        //    // for all null keys, we should ignore the value in this context
-        //    var newPairs = new Dictionary<string, string>(pairs.Comparer);
+        private void FillUpParameterFromKeyValuePairs(Dictionary<string, string> pairs, MamlParameter parameter)
+        {
+            // for all null keys, we should ignore the value in this context
+            var newPairs = new Dictionary<string, string>(pairs.Comparer);
 
-        //    foreach (var pair in pairs)
-        //    {
-        //        if (pair.Value != null)
-        //        {
-        //            newPairs[pair.Key] = pair.Value;
-        //        }
-        //    }
+            foreach (var pair in pairs)
+            {
+                if (pair.Value != null)
+                {
+                    newPairs[pair.Key] = pair.Value;
+                }
+            }
 
-        //    pairs = newPairs;
+            pairs = newPairs;
 
-        //    string value;
-        //    parameter.Type = pairs.TryGetValue(MarkdownStrings.Type, out value) ? value : null;
-        //    parameter.Aliases = pairs.TryGetValue(MarkdownStrings.Aliases, out value) ? SplitByCommaAndTrim(value) : new string[0];
-        //    parameter.ParameterValueGroup.AddRange(pairs.TryGetValue(MarkdownStrings.Accepted_values, out value) ? SplitByCommaAndTrim(value) : new string[0]);
-        //    parameter.Required = pairs.TryGetValue(MarkdownStrings.Required, out value) ? StringComparer.OrdinalIgnoreCase.Equals("true", value) : false;
-        //    parameter.Position = pairs.TryGetValue(MarkdownStrings.Position, out value) ? value : "named";
-        //    parameter.DefaultValue = pairs.TryGetValue(MarkdownStrings.Default_value, out value) ? value : null;
-        //    parameter.PipelineInput = pairs.TryGetValue(MarkdownStrings.Accept_pipeline_input, out value) ? value : "false";
-        //    parameter.Globbing = pairs.TryGetValue(MarkdownStrings.Accept_wildcard_characters, out value) ? StringComparer.OrdinalIgnoreCase.Equals("true", value) : false;
-        //    // having Applicable for the whole parameter is a little bit sloppy: ideally it should be per yaml entry.
-        //    // but that will make the code super ugly and it's unlikely that these two features would need to be used together.
-        //    parameter.Applicable = pairs.TryGetValue(MarkdownStrings.Applicable, out value) ? SplitByCommaAndTrim(value) : null;
-        //}
+            string value;
+            parameter.Type = pairs.TryGetValue(MarkdownStrings.Type, out value) ? value : null;
+            parameter.Aliases = pairs.TryGetValue(MarkdownStrings.Aliases, out value) ? SplitByCommaAndTrim(value) : new string[0];
+            parameter.ParameterValueGroup.AddRange(pairs.TryGetValue(MarkdownStrings.Accepted_values, out value) ? SplitByCommaAndTrim(value) : new string[0]);
+            parameter.Required = pairs.TryGetValue(MarkdownStrings.Required, out value) ? StringComparer.OrdinalIgnoreCase.Equals("true", value) : false;
+            parameter.Position = pairs.TryGetValue(MarkdownStrings.Position, out value) ? value : "named";
+            parameter.DefaultValue = pairs.TryGetValue(MarkdownStrings.Default_value, out value) ? value : null;
+            parameter.PipelineInput = pairs.TryGetValue(MarkdownStrings.Accept_pipeline_input, out value) ? value : "false";
+            parameter.Globbing = pairs.TryGetValue(MarkdownStrings.Accept_wildcard_characters, out value) ? StringComparer.OrdinalIgnoreCase.Equals("true", value) : false;
+            // having Applicable for the whole parameter is a little bit sloppy: ideally it should be per yaml entry.
+            // but that will make the code super ugly and it's unlikely that these two features would need to be used together.
+            parameter.Applicable = pairs.TryGetValue(MarkdownStrings.Applicable, out value) ? SplitByCommaAndTrim(value) : null;
+        }
 
-        //private bool ParameterRule(MamlCommand commmand)
-        //{
-        //    // grammar:
-        //    // #### -Name
-        //    // Description              -  optional, there also could be codesnippets in the description
-        //    //                             but no yaml codesnippets
-        //    //
-        //    // ```yaml                  -  one entry for every unique parameter metadata set
-        //    // ...
-        //    // ```
+        private bool ParameterRule(MamlCommand commmand)
+        {
+            // grammar:
+            // #### -Name
+            // Description              -  optional, there also could be codesnippets in the description
+            //                             but no yaml codesnippets
+            //
+            // ```yaml                  -  one entry for every unique parameter metadata set
+            // ...
+            // ```
 
-        //    var node = GetNextNode();
-        //    var headingNode = GetHeadingWithExpectedLevel(node, PARAMETER_NAME_HEADING_LEVEL);
-        //    if (headingNode == null)
-        //    {
-        //        return false;
-        //    }
+            var node = GetNextNode();
+            var headingNode = GetHeadingWithExpectedLevel(node, PARAMETER_NAME_HEADING_LEVEL);
+            if (headingNode == null)
+            {
+                return false;
+            }
 
-        //    var name = headingNode.Text;
-        //    if (name.Length > 0 && name[0] == '-')
-        //    {
-        //        name = name.Substring(1);
-        //    }
+            var name = GetText(headingNode);
+            if (name.Length > 0 && name[0] == '-')
+            {
+                name = name.Substring(1);
+            }
 
-        //    MamlParameter parameter = new MamlParameter()
-        //    {
-        //        Name = name,
-        //        Extent = headingNode.SourceExtent
-        //    };
+            MamlParameter parameter = new MamlParameter()
+            {
+                Name = name,
+                Extent = new SourceExtent(headingNode),
+            };
 
-        //    parameter.Description = ParagraphOrCodeBlockNodeRule("yaml");
-        //    parameter.FormatOption = headingNode.FormatOption;
+            parameter.Description = ParagraphOrCodeBlockNodeRule("yaml");
+            // TODO(markdig): fix the FormatOption
+            //parameter.FormatOption = headingNode.FormatOption;
 
-        //    if (StringComparer.OrdinalIgnoreCase.Equals(parameter.Name, MarkdownStrings.CommonParametersToken))
-        //    {
-        //        // ignore text body
-        //        commmand.SupportCommonParameters = true;
-        //        return true;
-        //    }
+            if (StringComparer.OrdinalIgnoreCase.Equals(parameter.Name, MarkdownStrings.CommonParametersToken))
+            {
+                // ignore text body
+                commmand.SupportCommonParameters = true;
+                return true;
+            }
 
-        //    if (StringComparer.OrdinalIgnoreCase.Equals(parameter.Name, MarkdownStrings.WorkflowParametersToken))
-        //    {
-        //        // ignore text body
-        //        commmand.IsWorkflow = true;
-        //        return true;
-        //    }
+            if (StringComparer.OrdinalIgnoreCase.Equals(parameter.Name, MarkdownStrings.WorkflowParametersToken))
+            {
+                // ignore text body
+                commmand.IsWorkflow = true;
+                return true;
+            }
 
-        //    // we are filling up two pieces here: Syntax and Parameters
-        //    // we are adding this parameter object to the parameters and later modifying it
-        //    // in the rare case, when there are multiply yaml snippets,
-        //    // the first one should be present in the resulted maml in the Parameters section
-        //    // (all of them would be present in Syntax entry)
-        //    var parameterSetMap = new Dictionary<string, MamlParameter>(StringComparer.OrdinalIgnoreCase);
+            // we are filling up two pieces here: Syntax and Parameters
+            // we are adding this parameter object to the parameters and later modifying it
+            // in the rare case, when there are multiply yaml snippets,
+            // the first one should be present in the resulted maml in the Parameters section
+            // (all of them would be present in Syntax entry)
+            var parameterSetMap = new Dictionary<string, MamlParameter>(StringComparer.OrdinalIgnoreCase);
 
-        //    CodeBlockNode codeBlock;
+            CodeBlock codeBlock;
 
-        //    // fill up couple other things, even if there are no codeBlocks
-        //    // if there are, we will fill it up inside
-        //    parameter.ValueRequired = true;
+            // fill up couple other things, even if there are no codeBlocks
+            // if there are, we will fill it up inside
+            parameter.ValueRequired = true;
 
-        //    // First parameter is what should be used in the Parameters section
-        //    MamlParameter firstParameter = null;
-        //    bool isAtLeastOneYaml = false;
+            // First parameter is what should be used in the Parameters section
+            MamlParameter firstParameter = null;
+            bool isAtLeastOneYaml = false;
 
-        //    while ((codeBlock = CodeBlockRule()) != null)
-        //    {
-        //        isAtLeastOneYaml = true;
-        //        var yaml = ParseYamlKeyValuePairs(codeBlock);
-        //        FillUpParameterFromKeyValuePairs(yaml, parameter);
+            while ((codeBlock = CodeBlockRule()) != null)
+            {
+                isAtLeastOneYaml = true;
+                var yaml = ParseYamlKeyValuePairs(codeBlock);
+                FillUpParameterFromKeyValuePairs(yaml, parameter);
 
-        //        parameter.ValueRequired = parameter.IsSwitchParameter() ? false : true;
+                parameter.ValueRequired = parameter.IsSwitchParameter() ? false : true;
 
-        //        // handle applicable tag
-        //        if (parameter.IsApplicable(this._applicableTag))
-        //        {
-        //            if (firstParameter == null)
-        //            {
-        //                firstParameter = parameter;
-        //            }
+                // handle applicable tag
+                if (parameter.IsApplicable(this._applicableTags))
+                {
+                    if (firstParameter == null)
+                    {
+                        firstParameter = parameter;
+                    }
 
-        //            // handle parameter sets
-        //            if (yaml.ContainsKey(MarkdownStrings.Parameter_Sets))
-        //            {
-        //                foreach (string parameterSetName in SplitByCommaAndTrim(yaml[MarkdownStrings.Parameter_Sets]))
-        //                {
-        //                    if (string.IsNullOrEmpty(parameterSetName))
-        //                    {
-        //                        continue;
-        //                    }
+                    // handle parameter sets
+                    if (yaml.ContainsKey(MarkdownStrings.Parameter_Sets))
+                    {
+                        foreach (string parameterSetName in SplitByCommaAndTrim(yaml[MarkdownStrings.Parameter_Sets]))
+                        {
+                            if (string.IsNullOrEmpty(parameterSetName))
+                            {
+                                continue;
+                            }
 
-        //                    parameterSetMap[parameterSetName] = parameter;
-        //                }
-        //            }
-        //            else
-        //            {
-        //                parameterSetMap[ALL_PARAM_SETS_MONIKER] = parameter;
-        //            }
-        //        }
+                            parameterSetMap[parameterSetName] = parameter;
+                        }
+                    }
+                    else
+                    {
+                        parameterSetMap[ALL_PARAM_SETS_MONIKER] = parameter;
+                    }
+                }
 
-        //        // in the rare case, when there are multiply yaml snippets
-        //        parameter = parameter.Clone();
-        //    }
+                // in the rare case, when there are multiply yaml snippets
+                parameter = parameter.Clone();
+            }
 
-        //    if (!isAtLeastOneYaml)
-        //    {
-        //        // if no yaml are present it's a special case and we leave it as is
-        //        firstParameter = parameter;
-        //    }
+            if (!isAtLeastOneYaml)
+            {
+                // if no yaml are present it's a special case and we leave it as is
+                firstParameter = parameter;
+            }
 
-        //    // capture these two piece of information
-        //    if (firstParameter != null)
-        //    {
-        //        commmand.Parameters.Add(firstParameter);
-        //        _parameterName2ParameterSetMap.Add(Tuple.Create(name, parameterSetMap));
-        //    }
+            // capture these two piece of information
+            if (firstParameter != null)
+            {
+                commmand.Parameters.Add(firstParameter);
+                _parameterName2ParameterSetMap.Add(Tuple.Create(name, parameterSetMap));
+            }
 
-        //    return true;
-        //}
+            return true;
+        }
     }
 }

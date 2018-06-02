@@ -1135,7 +1135,7 @@ This is the documentation for {0}
 
         private IEnumerable<MamlCommand> NodeModelToMamlModelV2(MarkdownDocument doc, string[] applicableTags = null)
         {
-            return (new MarkdigModelTransformer(null, null, applicableTags)).MarkdigModelToMamlModel(doc);
+            return (new MarkdigModelTransformer(null, null, ParserMode.FormattingPreserve, applicableTags)).MarkdigModelToMamlModel(doc);
             //return (new ModelTransformerVersion2(null, null, applicableTag)).NodeModelToMamlModel(doc);
         }
     }
